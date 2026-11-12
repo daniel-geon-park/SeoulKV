@@ -1,0 +1,13 @@
+diff --git a/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h b/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
+index 779585c0bf..286e3ffdc0 100644
+--- a/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
++++ b/tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
+@@ -2329,7 +2329,7 @@ inline void _topk_xl_add_lsb_indices_()
+     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+     for (int j = 1; j < row_scale_factor; j++)
+     {
+-        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
++        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
+ 
+         for (int i = 0; i < 4; i++)
+         {

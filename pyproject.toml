@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seoulkv4"
+version = "0.1.0"
+description = "SeoulKV4 sparse decode attention for Tenstorrent hardware"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+# The caller supplies the validated TTNN/TT-Metal runtime.
+dependencies = ["numpy", "torch"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+seoulkv4 = ["_compat/*.patch"]
