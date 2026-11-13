@@ -2,7 +2,9 @@
 
 ![Concept](./img/seoulkv4_concept.png)
 
-**925 us/layer (TTNN FlashDecode) --> 587 us/layer (SeoulKV4)!**
+**Speed up your attention layer.**
+
+**925 us/layer (TTNN FlashDecode) --> 587 us/layer (SeoulKV4, 1.57x Speedup)!**
 
 ## How SeoulKV4 works
 
