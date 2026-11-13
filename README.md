@@ -1,4 +1,4 @@
-# SeoulKV4
+# SeoulKV4 For Tenstorrent Blackhole
 
 ![Concept](./img/seoulkv4_concept.png)
 
