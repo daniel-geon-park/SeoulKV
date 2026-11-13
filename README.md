@@ -2,10 +2,23 @@
 
 ![Concept](./img/seoulkv4_concept.png)
 
-A proof of concept for sparse decode attention on Tenstorrent Blackhole. It
-runs the existing four-program cascade for a fixed, flat K/V cache and a
-different query on each call. The caller supplies a TTNN MeshDevice and
-builds or loads the grouped Stage-I index for that cache.
+## How SeoulKV4 works
+
+SeoulKV4 is a proof of concept for sparse decode attention on Tenstorrent
+Blackhole. It uses a compact index in on-chip SRAM to avoid scanning the
+entire K/V cache in GDDR at every decode step.
+
+1. **Find promising clusters.** Build a clustered index for the fixed K/V
+   cache. For each query, scan 2-bit cluster centroids in SRAM and fetch
+   the remaining bits only for the clusters that pass this first filter.
+2. **Narrow the key pool.** Expand the selected clusters into candidate keys
+   and remove duplicates. Score them at 2, 4, and 8 bits, dropping candidates
+   at each step and fetching only the additional bits for survivors.
+3. **Compute attention.** Read the FP8 K/V records for the top 100 retrieval
+   tokens per query head, and attend to them together with the first and
+   most recent tokens (the sink and local windows).
+
+## Quick start
 
 ```python
 from seoulkv4 import SeoulKV4, SeoulKV4Config, SeoulKV4Index
