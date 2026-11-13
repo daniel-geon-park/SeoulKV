@@ -2,6 +2,8 @@
 
 ![Concept](./img/seoulkv4_concept.png)
 
+**925 us/layer (TTNN FlashDecode) --> 587 us/layer (SeoulKV4)!**
+
 ## How SeoulKV4 works
 
 SeoulKV4 is a proof of concept for sparse decode attention on Tenstorrent
