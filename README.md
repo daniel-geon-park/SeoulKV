@@ -1,5 +1,7 @@
 # SeoulKV4
 
+![Concept](./img/seoulkv4_concept.png)
+
 A proof of concept for sparse decode attention on Tenstorrent Blackhole. It
 runs the existing four-program cascade for a fixed, flat K/V cache and a
 different query on each call. The caller supplies a TTNN MeshDevice and
