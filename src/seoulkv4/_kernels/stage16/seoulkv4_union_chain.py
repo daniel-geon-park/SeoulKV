@@ -1,15 +1,17 @@
 """Fused refinement and clean-core sparse attention with persistent L1.
 
 The two refinement phases reuse the same workers and explicitly transition
-operation state after one compute startup. Final256/144 head-list publication
-can overlap the final merge with residual fetch. Upper and middle bits stay
-in allocated L1 pages; only the low nibble is fetched from GDDR in Stage II.
+operation state after one compute startup. Stage II starts consuming each
+head's 256-entry list as soon as it is ready. Upper and middle bits stay in
+allocated L1 pages; only the low nibble is fetched from GDDR in Stage II.
 Attention uses16 disjoint workers, preserving clean TRISC state while hiding Q
 preparation and starting each head when its final100 IDs are ready.
 """
 
 from seoulkv4._kernels.stage16.fusion import combine
 from seoulkv4._kernels.stage16.attention_overlap import combine as combine_attention
+from seoulkv4._kernels.stage16.fusion_abi import FRONTIER_PACKET_BYTES
+from seoulkv4.config import STAGE16_PER_HEAD, STAGE16_PER_SHARD
 
 
 def build_chain(builder, ttnn, device, inputs, options):
@@ -17,12 +19,13 @@ def build_chain(builder, ttnn, device, inputs, options):
     attention_zones = options.pop("attention_zones", None)
     if (
         options["workers"] != 4
-        or options["local_m"] != 160
-        or options["m16"] != 400
+        or options["local_m"] != STAGE16_PER_SHARD
+        or options["m16"] != STAGE16_PER_HEAD
         or options["profile_stop"] != 10
     ):
         raise ValueError(
-            "production union boundary requires W4/local160/M400/full stop10"
+            f"production union boundary requires W4/local{STAGE16_PER_SHARD}/"
+            f"M{STAGE16_PER_HEAD}/full stop10"
         )
     local = options["n16"] // options["workers"]
     # Compact middle-bit pages survive program switches, with no root-sized
@@ -106,6 +109,8 @@ def build_chain(builder, ttnn, device, inputs, options):
         stage2_scoring=b.get("stage2_scoring"),
         stage16_dynamic_input_count=a.get("stage16_dynamic_input_count", False),
         stage16_schedule=a.get("stage16_schedule", {}),
+        frontier_publication_ranks=[STAGE16_PER_HEAD],
+        list_packet_bytes=[FRONTIER_PACKET_BYTES],
         union_boundary="frontier-stream",
         program_count=len(programs),
         programs=programs,

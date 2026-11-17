@@ -8,9 +8,14 @@ from seoulkv4._kernels.stage16.fusion_abi import (
     FusionSemaphore,
     ATTENTION_DESTINATION,
     AttentionSemaphore,
+    FRONTIER_HEADER_WORDS,
+    FRONTIER_PACKET_BYTES,
+    STAGE2_TILES_PER_READER,
+    STAGE2_UNION_MAX,
 )
 from seoulkv4._kernels.stage16.seoulkv4_stage16_matrix import native_helpers
 from seoulkv4._kernels.stage16.seoulkv4_union_matrix import EXPAND
+from seoulkv4.config import STAGE16_PER_HEAD, STAGE16_PER_SHARD
 
 
 def header(kind, *, local, id_bits, attention=False):
@@ -23,6 +28,12 @@ def header(kind, *, local, id_bits, attention=False):
         + ATTENTION_DESTINATION.cpp_defines("SKV4_ARG_FATT_RT", base=writer_rt.words)
         + f"#define SKV4_CODEGEN_FUSED_ATTENTION {int(attention)}\n"
         + f"#define SKV4_FUSED_LOCAL {local}\n#define SKV4_FUSED_ID_BITS {id_bits}\n"
+        + f"#define SKV4_FUSED_LOCAL_M {STAGE16_PER_SHARD}\n"
+        + f"#define SKV4_FUSED_M16 {STAGE16_PER_HEAD}\n"
+        + f"#define SKV4_FUSED_LIST_HEADER {FRONTIER_HEADER_WORDS}\n"
+        + f"#define SKV4_FUSED_LIST_BYTES {FRONTIER_PACKET_BYTES}\n"
+        + f"#define SKV4_FUSED_UNION_MAX {STAGE2_UNION_MAX}\n"
+        + f"#define SKV4_FUSED_STAGE2_SCORE_STRIDE {STAGE2_TILES_PER_READER * 32}\n"
     )
 
 
@@ -33,7 +44,7 @@ constexpr uint32_t PAD=(LOCAL+31)/32*32;
 constexpr uint32_t QUARTER_CHUNKS=(PAD/32+3)/4;
 constexpr uint32_t ID_BITS=SKV4_FUSED_ID_BITS;
 constexpr uint32_t ID_MASK=(1u<<ID_BITS)-1;
-constexpr uint32_t LIST_BYTES=1664;
+constexpr uint32_t LIST_BYTES=SKV4_FUSED_LIST_BYTES;
 constexpr uint32_t META_BYTES=(LOCAL+1)*4<=4096?4096:((LOCAL+1)*4+63)/64*64;
 constexpr uint32_t PREFIX_KEYS=LOCAL<1024?LOCAL:1024;
 constexpr uint32_t PREFIX_PAGES=(LOCAL+PREFIX_KEYS-1)/PREFIX_KEYS;
@@ -129,46 +140,42 @@ void kernel_main() {
     uint32_t seen[(LOCAL+31)/32]={};
     uint32_t total=0, mine=0, tile=0;
     for(uint32_t h=0;h<4;++h) {
-     for(uint32_t packet=0;packet<2;++packet) {
-      // Do not reset after publication1: publication2 may already be present.
-      auto ready=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem(SKV4_SEM_HEAD0_READY+h));
-      noc_semaphore_wait_min(ready,packet+1);
-      if(packet==1) noc_semaphore_set(ready,0);
-      const uint32_t offset=packet?1088:0,bytes=packet?576:1088;
-      noc_async_read(get_noc_addr(slot*4+h,handoff)+offset,
-                     front+h*LIST_BYTES+offset,bytes);
-      noc_async_read_barrier();
-      for(uint32_t j=packet?256:0;j<(packet?400:256);++j) {
-        const uint32_t pos=lists[h*(LIST_BYTES/4)+16+j];
-        const uint32_t local=pos-shard*LOCAL;
-        if(local>=live) continue;
-        const uint32_t mask=1u<<(local%32);
-        if(seen[local/32]&mask) continue;
-        seen[local/32]|=mask;
-        const uint32_t tag=(pos<<ID_BITS)|tokens[local];
-        tags[1+total]=tag;
-        const bool own=(total/32)%4==part;
-        ++total;
-        if(!own) continue;
-        const uint32_t row=mine%32;
-        if(row==0) { cb_reserve_back(SKV4_CB_PACKED_CANDIDATES,3); tile=get_write_ptr(SKV4_CB_PACKED_CANDIDATES); }
-        const uint32_t lane=(row/16)*2048+(row%16)*64;
-        noc_async_read(get_noc_addr((slot*4+shard)*PREFIX_PAGES+local/PREFIX_KEYS,upper)
-                       +(local%PREFIX_KEYS)*64,tile+lane,64);
-        noc_async_read(get_noc_addr((slot*4+shard)*MIDDLE_PAGES+local/16,middle)
-                       +(local%16)*64,tile+4096+lane,64);
-        const uint64_t low=get_noc_addr(slot*context+(tag&ID_MASK),r4);
-        noc_async_read(low,tile+8192+lane,64);
-        noc_async_read(low+64,tile+8192+lane+1024,64);
-        ++mine;
-        if(mine%32==0) {
-            noc_async_read_barrier(); cb_push_back(SKV4_CB_PACKED_CANDIDATES,3);
-            cb_reserve_back(SKV4_CB_LIVE_CONTROL,1);
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(SKV4_CB_LIVE_CONTROL))=32;
-            cb_push_back(SKV4_CB_LIVE_CONTROL,1);
+        await(SKV4_SEM_HEAD0_READY+h,1);
+        noc_async_read(get_noc_addr(slot*4+h,handoff),front+h*LIST_BYTES,LIST_BYTES);
+        noc_async_read_barrier();
+        for(uint32_t j=0;j<SKV4_FUSED_M16;++j) {
+            const uint32_t pos=lists[h*(LIST_BYTES/4)+SKV4_FUSED_LIST_HEADER+j];
+            const uint32_t local=pos-shard*LOCAL;
+            if(local>=live) continue;
+            const uint32_t mask=1u<<(local%32);
+            if(seen[local/32]&mask) continue;
+            seen[local/32]|=mask;
+            const uint32_t tag=(pos<<ID_BITS)|tokens[local];
+            tags[1+total]=tag;
+            const bool own=(total/32)%4==part;
+            ++total;
+            if(!own) continue;
+            const uint32_t row=mine%32;
+            if(row==0) {
+                cb_reserve_back(SKV4_CB_PACKED_CANDIDATES,3);
+                tile=get_write_ptr(SKV4_CB_PACKED_CANDIDATES);
+            }
+            const uint32_t lane=(row/16)*2048+(row%16)*64;
+            noc_async_read(get_noc_addr((slot*4+shard)*PREFIX_PAGES+local/PREFIX_KEYS,upper)
+                           +(local%PREFIX_KEYS)*64,tile+lane,64);
+            noc_async_read(get_noc_addr((slot*4+shard)*MIDDLE_PAGES+local/16,middle)
+                           +(local%16)*64,tile+4096+lane,64);
+            const uint64_t low=get_noc_addr(slot*context+(tag&ID_MASK),r4);
+            noc_async_read(low,tile+8192+lane,64);
+            noc_async_read(low+64,tile+8192+lane+1024,64);
+            ++mine;
+            if(mine%32==0) {
+                noc_async_read_barrier(); cb_push_back(SKV4_CB_PACKED_CANDIDATES,3);
+                cb_reserve_back(SKV4_CB_LIVE_CONTROL,1);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(SKV4_CB_LIVE_CONTROL))=32;
+                cb_push_back(SKV4_CB_LIVE_CONTROL,1);
+            }
         }
-      }
-     }
     }
     if(mine%32) {
         noc_async_read_barrier(); cb_push_back(SKV4_CB_PACKED_CANDIDATES,3);
@@ -176,7 +183,7 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(SKV4_CB_LIVE_CONTROL))=mine%32;
         cb_push_back(SKV4_CB_LIVE_CONTROL,1);
     }
-    if(total>640) __builtin_trap();
+    if(total>SKV4_FUSED_UNION_MAX) __builtin_trap();
     tags[0]=total; __sync_synchronize(); cb_push_back(SKV4_CB_UNION_META,1);
     for(uint32_t message=0;message<2;++message) {
         const uint32_t value=message?total:0;
@@ -393,8 +400,8 @@ void kernel_main() {
     auto packet=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     uint32_t i0=0,i1=0;
     for(uint32_t rank=0;rank<512;++rank) {
-        uint32_t word=0xff800000u;
-        if(rank<160) {
+        uint32_t word=0xff80ffffu;
+        if(rank<SKV4_FUSED_LOCAL_M && rank<live) {
             const uint32_t w0=i0<1024?ranked[(i0>>6)+((i0&63u)<<4)]:0xff800000u;
             const uint32_t w1=halves==2&&i1<live-1024?
                 ranked[1024+(i1>>6)+((i1&63u)<<4)]:0xff800000u;
@@ -417,7 +424,7 @@ void kernel_main() {
         await(SKV4_SEM_STAGE16_FRONTIERS_READY,4);
         auto pages=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(merge);
         const auto fetch=[&](uint32_t s,uint32_t rank)->uint32_t {
-            if(rank>=160) return 0xff800000u;
+            if(rank>=SKV4_FUSED_LOCAL_M) return 0xff80ffffu;
             const uint32_t at=s?511-rank:rank;
             return pages[s*1024+((at&31u)<<4)+(at>>5)];
         };
@@ -426,33 +433,23 @@ void kernel_main() {
         uint16_t s0=ordered(w0>>16),s1=ordered(w1>>16);
         uint16_t s2=ordered(w2>>16),s3=ordered(w3>>16);
         auto out=reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch+10240);
-        for(uint32_t j=0;j<16;++j) out[j]=j?0:400;
-        for(uint32_t rank=0;rank<400;++rank) {
+        for(uint32_t j=0;j<SKV4_FUSED_LIST_HEADER;++j) out[j]=j?0:SKV4_FUSED_M16;
+        for(uint32_t rank=0;rank<SKV4_FUSED_M16;++rank) {
             const bool a=s1>s0,b=s3>s2;
             const uint16_t sa=a?s1:s0,sb=b?s3:s2;
             const uint32_t winner=sb>sa?(b?3:2):(a?1:0);
             if(winner==0) {
-                out[rank+16]=w0&0xffffu; w0=fetch(0,++i0); s0=ordered(w0>>16);
+                out[rank+SKV4_FUSED_LIST_HEADER]=w0&0xffffu; w0=fetch(0,++i0); s0=ordered(w0>>16);
             } else if(winner==1) {
-                out[rank+16]=w1&0xffffu; w1=fetch(1,++i1); s1=ordered(w1>>16);
+                out[rank+SKV4_FUSED_LIST_HEADER]=w1&0xffffu; w1=fetch(1,++i1); s1=ordered(w1>>16);
             } else if(winner==2) {
-                out[rank+16]=w2&0xffffu; w2=fetch(2,++i2); s2=ordered(w2>>16);
+                out[rank+SKV4_FUSED_LIST_HEADER]=w2&0xffffu; w2=fetch(2,++i2); s2=ordered(w2>>16);
             } else {
-                out[rank+16]=w3&0xffffu; w3=fetch(3,++i3); s3=ordered(w3>>16);
-            }
-            if(rank+1==256) {
-                __sync_synchronize();
-                noc_async_write(scratch+10240,get_noc_addr(slot*4+shard,handoff),1088);
-                noc_async_write_barrier();
-                for(uint32_t s=0;s<4;++s) for(uint32_t p=0;p<4;++p)
-                    noc_semaphore_inc(get_noc_addr(hx[s]+p,hy[s],sem(SKV4_SEM_HEAD0_READY+shard)),1);
-                noc_async_atomic_barrier();
+                out[rank+SKV4_FUSED_LIST_HEADER]=w3&0xffffu; w3=fetch(3,++i3); s3=ordered(w3>>16);
             }
         }
-        // The published prefix and the remaining144 positions own disjoint
-        // cache lines. No extra scalar stack-to-mailbox copy is needed.
         __sync_synchronize();
-        noc_async_write(scratch+10240+1088,get_noc_addr(slot*4+shard,handoff)+1088,576);
+        noc_async_write(scratch+10240,get_noc_addr(slot*4+shard,handoff),LIST_BYTES);
         noc_async_write_barrier();
         for(uint32_t s=0;s<4;++s) for(uint32_t p=0;p<4;++p)
             noc_semaphore_inc(get_noc_addr(hx[s]+p,hy[s],sem(SKV4_SEM_HEAD0_READY+shard)),1);
@@ -470,7 +467,7 @@ void kernel_main() {
         cb_wait_front(SKV4_CB_SCORE_TILES,1);
         const uint32_t tile=get_read_ptr(SKV4_CB_SCORE_TILES);
         for(uint32_t h=0;h<4;++h) for(uint32_t j=0;j<32;++j)
-            temp[h*160+c*32+j]=c*32+j<own_count?score_at(tile,j,h):0xff80u;
+            temp[h*SKV4_FUSED_STAGE2_SCORE_STRIDE+c*32+j]=c*32+j<own_count?score_at(tile,j,h):0xff80u;
         cb_pop_front(SKV4_CB_SCORE_TILES,1);
     }
     cb_reserve_back(SKV4_CB_SELECTOR_INPUT,1);
@@ -479,7 +476,7 @@ void kernel_main() {
     for(uint32_t j=total;j<1024;++j) scores[j]=0xff80u;
     __sync_synchronize();
     for(uint32_t h=0;h<4;++h) for(uint32_t c=0;c<own_chunks;++c)
-        noc_async_write(scratch+(h*160+c*32)*2,
+        noc_async_write(scratch+(h*SKV4_FUSED_STAGE2_SCORE_STRIDE+c*32)*2,
             get_noc_addr(row_x+h,row_y,score_page+(c*4+part)*64),64);
     noc_async_write_barrier();
     for(uint32_t h=0;h<4;++h)

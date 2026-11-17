@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 
+DEFAULT_NPROBE = 256
+STAGE16_PER_HEAD = 256
+STAGE16_PER_SHARD = STAGE16_PER_HEAD
+
 
 @dataclass(frozen=True)
 class SeoulKV4Config:
@@ -32,5 +36,5 @@ class _KernelOptions:
     skv4_stage15_m = 2048
     skv4_stage15_union_m = 1600
     skv4_stage15_workers = 6
-    skv4_stage16_m = 400
-    skv4_stage16_local_m = 160
+    skv4_stage16_m = STAGE16_PER_HEAD
+    skv4_stage16_local_m = STAGE16_PER_SHARD

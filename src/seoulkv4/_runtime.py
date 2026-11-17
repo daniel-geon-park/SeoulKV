@@ -33,11 +33,6 @@ def _chain_mark(message):
         print(f"[skv4-chain] {message}", flush=True)
 
 
-def _stage16_local_m(args, n):
-    requested = args.skv4_stage16_local_m or 160
-    return min(requested, n // 4)
-
-
 def initialize(ttnn, device, k, v, q, index, args):
     context, d = k.shape[1], k.shape[-1]
     group = args.n_heads // args.n_kv_heads
@@ -141,7 +136,7 @@ def initialize(ttnn, device, k, v, q, index, args):
         n16=n,
         m16=args.skv4_stage16_m,
         workers=4,
-        local_m=_stage16_local_m(args, n),
+        local_m=args.skv4_stage16_local_m,
         group=group,
         topk=args.topk,
         debug_indices=args.skv4_debug_indices,
@@ -367,9 +362,9 @@ def metadata(state):
         "stage16_schedule": state.get("selector", {}).get("stage16_schedule", {}),
         "refinement_fusion": {
             "program_count": 1,
-            "frontier_publication_ranks": [256, 400],
+            "frontier_publication_ranks": state["selector"]["frontier_publication_ranks"],
             "cb_bytes_per_core": state["selector"]["fusion_cb_bytes"],
-            "list_packet_bytes": [1088, 576],
+            "list_packet_bytes": state["selector"]["list_packet_bytes"],
             "attention_separate_program": False,
             "attention_clean_compute_state": True,
         },

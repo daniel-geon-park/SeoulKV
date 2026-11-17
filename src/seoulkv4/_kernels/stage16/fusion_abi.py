@@ -2,6 +2,14 @@
 
 from enum import IntEnum, unique
 from seoulkv4._kernels.common.argument_abi import layout
+from seoulkv4.config import STAGE16_PER_HEAD
+
+
+FRONTIER_HEADER_WORDS = 16
+FRONTIER_PACKET_BYTES = (FRONTIER_HEADER_WORDS + STAGE16_PER_HEAD) * 4
+STAGE2_UNION_MAX = 4 * STAGE16_PER_HEAD
+# Stage II stripes 32-key score tiles round-robin across four readers.
+STAGE2_TILES_PER_READER = (STAGE2_UNION_MAX + 127) // 128
 
 
 ATTENTION_DESTINATION = layout("attention_x", "attention_y")

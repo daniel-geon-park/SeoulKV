@@ -5,7 +5,12 @@ dispatched split programs. No rendered C++ is inspected or transformed.
 """
 
 from seoulkv4._kernels.codegen import refinement_fusion as codegen
-from seoulkv4._kernels.stage16.fusion_abi import FusionCB as CB
+from seoulkv4._kernels.stage16.fusion_abi import (
+    FRONTIER_PACKET_BYTES,
+    STAGE2_TILES_PER_READER,
+    STAGE2_UNION_MAX,
+    FusionCB as CB,
+)
 from seoulkv4._kernels.stage16.fusion_abi import FusionSemaphore as SEM
 
 
@@ -36,12 +41,12 @@ def combine(tt, a, b, *, n16, context):
         )
 
     cbs = [
-        cb(CB.FRONTIER_INPUT, tt.uint8, 8192),
+        cb(CB.FRONTIER_INPUT, tt.uint8, 4 * FRONTIER_PACKET_BYTES),
         cb(CB.DECODED_KEYS, tt.bfloat16, 2048, 16),
         cb(CB.STAGE16_SCORE_STAGING, tt.uint8, ((quarter * 256 + 63) // 64) * 64),
         cb(CB.TOPK_SECOND_INPUT, tt.bfloat16, 2048),
         cb(CB.COPY_WITNESS, tt.bfloat16, 2048, 2),
-        cb(CB.UNION_META, tt.uint32, 4096),
+        cb(CB.UNION_META, tt.uint32, ((STAGE2_UNION_MAX + 16) // 16) * 64),
         cb(CB.STAGE2_QUERY, tt.bfloat16, 2048, 16),
         cb(CB.STAGE2_FRONTIER, tt.uint32, 4096, 2),
         cb(CB.STAGE16_FRONTIER, tt.float32, 4096, 2),
@@ -52,7 +57,8 @@ def combine(tt, a, b, *, n16, context):
         cb(CB.PACKED_CANDIDATES, tt.uint32, 4096, 6),
         cb(CB.PACKED_MIDDLE, tt.uint32, 4096, quarter),
         cb(CB.SOURCE_IDS, tt.uint32, ((local * 4 + 190) // 64) * 64),
-        cb(CB.SCORE_TILES, tt.bfloat16, 2048, max(quarter, 5)),
+        # The writer waits for all union tags before draining Stage II scores.
+        cb(CB.SCORE_TILES, tt.bfloat16, 2048, max(quarter, STAGE2_TILES_PER_READER)),
         cb(CB.STAGE2_EXCHANGE, tt.uint32, 4096),
         cb(CB.SELECTOR_INPUT, tt.bfloat16, 4096),
         cb(CB.WRITER_SCRATCH, tt.uint8, 16384),

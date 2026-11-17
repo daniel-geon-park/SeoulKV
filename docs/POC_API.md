@@ -44,11 +44,11 @@ for the device configuration and TT-Metal requirements.
 ```python
 class SeoulKV4Index:
     @classmethod
-    def build(cls, k, v=None, *, sink=128, local=256, nprobe=384,
+    def build(cls, k, v=None, *, sink=128, local=256, nprobe=256,
               lam=0.0625, seed=0, build_device="cpu") -> "SeoulKV4Index": ...
 
     @classmethod
-    def load(cls, path: str | Path) -> "SeoulKV4Index": ...
+    def load(cls, path: str | Path, *, nprobe=None) -> "SeoulKV4Index": ...
 
     def dump(self, path: str | Path) -> None: ...
 
@@ -62,6 +62,8 @@ class SeoulKV4Index:
   and is checked only for matching shape, dtype, and device. Building an index
   requires no query or TT device.
 - `nprobe` is the number of centroids selected per query head in Stage I Fine.
+  It defaults to 256 when building an index. Loading keeps the saved probe
+  budget unless `nprobe` is supplied; changing it does not rebuild the index.
   Pass one value for all KV groups or four values in KV head order. Each value
   must be a multiple of 16 between 16 and 512 and cannot exceed the centroid
   count. The first execution checks that the resulting key pool fits the
@@ -93,8 +95,8 @@ pool exceeds the configured capacity, the runtime reports an error instead
 of truncating candidates.
 
 The current profile uses six Stage 1.5 scorer shards, a top-2,048 frontier per
-query head with the first 1,600 entries entering the group union, 400 survivors
-per query head in Stage 1.6 with a local limit of 160 per shard, and 100 final
+query head with the first 1,600 entries entering the group union, 256 survivors
+per query head in Stage 1.6 with a local limit of 256 per shard, and 100 final
 retrieval keys per query head. These budgets and the kernel layouts are fixed.
 The index supplies `nprobe`, `lam`, and the sink and local ranges.
 

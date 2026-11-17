@@ -18,7 +18,21 @@ from seoulkv4._codecs.index import (
 )
 from seoulkv4._index_build import build_stage1_cell, centroid_count
 from seoulkv4._kernels.common.attention_zones import AttentionZones
-from seoulkv4.config import _KernelOptions
+from seoulkv4.config import DEFAULT_NPROBE, _KernelOptions
+
+
+def _probe_counts(nprobe: int | Sequence[int], nc: int) -> tuple[int, ...]:
+    if type(nprobe) is int:
+        probes = (nprobe,) * 4
+    elif isinstance(nprobe, Sequence) and not isinstance(nprobe, (str, bytes)):
+        probes = tuple(nprobe)
+    else:
+        raise ValueError("nprobe must be an integer or four per-head integers")
+    if len(probes) != 4 or any(
+        type(p) is not int or not 16 <= p <= min(512, nc) or p % 16 for p in probes
+    ):
+        raise ValueError(f"each nprobe must be a multiple of 16 in [16, {min(512, nc)}]")
+    return probes
 
 
 class SeoulKV4Index:
@@ -42,9 +56,19 @@ class SeoulKV4Index:
         self._nprobe_source = metadata.get("nprobe_source")
 
     @classmethod
-    def load(cls, path: str | Path) -> SeoulKV4Index:
-        """Read a saved index or a grouped Stage-I fixture, discarding legacy Q."""
+    def load(
+        cls, path: str | Path, *, nprobe: int | Sequence[int] | None = None
+    ) -> SeoulKV4Index:
+        """Read an index, discarding legacy Q and optionally overriding its probe budget."""
         cells, metadata = load_index(path)
+        if nprobe is not None:
+            if len(cells) != 4:
+                raise ValueError("SeoulKV4 requires four ordered index cells")
+            probes = _probe_counts(
+                nprobe, min(len(cell["centroids"]) for cell in cells)
+            )
+            cells = [dict(cell, p=p) for cell, p in zip(cells, probes, strict=True)]
+            metadata = dict(metadata, nprobe_source="load override")
         return cls(cells, metadata)
 
     def dump(self, path: str | Path) -> None:
@@ -59,7 +83,7 @@ class SeoulKV4Index:
         *,
         sink: int = 128,
         local: int = 256,
-        nprobe: int | Sequence[int] = 384,
+        nprobe: int | Sequence[int] = DEFAULT_NPROBE,
         lam: float = 0.0625,
         seed: int = 0,
         build_device: str | torch.device = "cpu",
@@ -103,18 +127,7 @@ class SeoulKV4Index:
             raise ValueError(
                 "centroid count exceeds the Fine selector's 16-bit positions"
             )
-        if type(nprobe) is int:
-            probes = (nprobe,) * 4
-        elif isinstance(nprobe, Sequence) and not isinstance(nprobe, (str, bytes)):
-            probes = tuple(nprobe)
-        else:
-            raise ValueError("nprobe must be an integer or four per-head integers")
-        if len(probes) != 4 or any(
-            type(p) is not int or not 16 <= p <= min(512, nc) or p % 16 for p in probes
-        ):
-            raise ValueError(
-                f"each nprobe must be a multiple of 16 in [16, {min(512, nc)}]"
-            )
+        probes = _probe_counts(nprobe, nc)
         if (
             isinstance(lam, bool)
             or not isinstance(lam, Real)

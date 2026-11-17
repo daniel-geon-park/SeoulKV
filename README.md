@@ -30,7 +30,7 @@ from seoulkv4 import SeoulKV4, SeoulKV4Config, SeoulKV4Index
 # device: caller-owned, single-board TTNN MeshDevice
 # k and v: CPU BF16 [4, T, 256]; k is post-RoPE
 # q0 and q1: CPU BF16 [1, 1, 16, 256], post-RoPE
-index = SeoulKV4Index.build(k, v, sink=128, local=256, nprobe=384)
+index = SeoulKV4Index.build(k, v, sink=128, local=256)
 # Optionally save and reuse this index without clustering again:
 # index.dump("stage1_index.npz")
 # index = SeoulKV4Index.load("stage1_index.npz")
